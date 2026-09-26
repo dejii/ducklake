@@ -1,0 +1,58 @@
+# name: test/sql/add_files/add_files_hive_calendar_transform.test
+# description: A calendar transform's hive folder value is not recorded as the source column's statistics
+# group: [add_files]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/add_files_hive_calendar/', METADATA_CATALOG 'metadata');
+
+statement ok
+COPY (SELECT 1 AS id, 2019 AS year UNION ALL SELECT 2, 2019) TO '{DATA_PATH}/add_files_hive_calendar_src' (FORMAT parquet, PARTITION_BY (year));
+
+# the files lack the source column, so it reads as its default
+statement ok
+CREATE TABLE ducklake.t (id INT, dt DATE DEFAULT DATE '2019-05-05');
+
+statement ok
+ALTER TABLE ducklake.t SET PARTITIONED BY (year(dt));
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 't', '{DATA_PATH}/add_files_hive_calendar_src/**/*.parquet', allow_missing => true);
+
+query I
+SELECT count(*) FROM ducklake.t WHERE dt = DATE '2019-05-05'
+----
+2
+
+query I
+SELECT count(*) FROM ducklake.t WHERE dt > DATE '2019-01-01'
+----
+2
+
+# without a default the source column is NULL
+statement ok
+CREATE TABLE ducklake.t2 (id INT, ts TIMESTAMP);
+
+statement ok
+ALTER TABLE ducklake.t2 SET PARTITIONED BY (year(ts));
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 't2', '{DATA_PATH}/add_files_hive_calendar_src/**/*.parquet', allow_missing => true);
+
+query I
+SELECT count(*) FROM ducklake.t2 WHERE ts IS NULL
+----
+2
+
+# the folder value is still recorded as the partition value
+query I
+SELECT DISTINCT partition_value FROM metadata.ducklake_file_partition_value
+----
+2019

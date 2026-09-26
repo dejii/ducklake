@@ -1151,9 +1151,8 @@ void DuckLakeFileProcessor::MapColumnStats(ParquetFileMetadata &file_metadata, D
 
 	// Process statistics for hive partition columns
 	for (auto &entry : file_metadata.hive_partition_values) {
-		if (entry.transform.type == DuckLakeTransformType::BUCKET ||
-		    DuckLakePartitionUtils::IsEpochTransform(entry.transform.type)) {
-			// Hash/epoch-ordinal folder values are not source column values, so no statistics from them
+		if (entry.transform.type != DuckLakeTransformType::IDENTITY) {
+			// Only identity folder values are source column values, so no statistics from other transforms
 			continue;
 		}
 
