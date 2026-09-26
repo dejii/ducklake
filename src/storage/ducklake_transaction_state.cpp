@@ -853,6 +853,19 @@ bool DuckLakeTransactionState::TryMergeInlinedStats(const vector<DuckLakeColumnS
 	return true;
 }
 
+static bool HasChangedInlinedColumns(TableIndex table_id, DuckLakeSnapshot snapshot,
+                                     const DuckLakeCommitContext &context) {
+	auto result = context.query_metadata_with_snapshot(
+	    snapshot, DuckLakeMetadataManager::GetChangedInlinedColumnCountSql(table_id));
+	if (result->HasError()) {
+		result->GetErrorObject().Throw("Failed to read the inlined data tables from DuckLake: ");
+	}
+	for (auto &row : *result) {
+		return row.GetValue<int64_t>(0) > 0;
+	}
+	return false;
+}
+
 //! The field ids of `table_id`'s skip_stats_columns option, read from the metadata rather than the catalog so
 //! the server-side commit resolves it too. Only roots matter here: step 3 of the recompute merges inlined stats,
 //! which TryMergeInlinedStats only produces for scalar roots.
@@ -991,6 +1004,9 @@ void DuckLakeTransactionState::RecomputeGlobalStatsAfterRewrite(string &batch_qu
 	//    non-scalar root; feeding it nested leaves would emit MIN("<leaf>") against a column that does not exist.
 	idx_t net_inlined = context.get_net_inlined_row_count(table_id);
 	if (net_inlined > 0) {
+		if (HasChangedInlinedColumns(table_id, snapshot, context)) {
+			return; // an inlined table was created with other columns - keep the existing stats
+		}
 		vector<DuckLakeColumnSchemaEntry> root_columns;
 		for (auto &col : columns) {
 			if (col.is_root) {

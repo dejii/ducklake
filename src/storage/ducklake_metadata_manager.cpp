@@ -838,6 +838,35 @@ WHERE table_id = %d)",
 	                          table_id.index);
 }
 
+string DuckLakeMetadataManager::GetChangedInlinedColumnCountSql(TableIndex table_id) {
+	// counts current top-level columns whose (id, name, type) differs in the schema an inlined table was created with
+	return StringUtil::Format(R"(
+WITH inlined AS (
+	SELECT idt.table_id, (
+		SELECT MAX(sv.begin_snapshot)
+		FROM {METADATA_CATALOG}.ducklake_schema_versions sv
+		WHERE sv.table_id = idt.table_id AND sv.schema_version <= idt.schema_version
+	) AS schema_snapshot
+	FROM {METADATA_CATALOG}.ducklake_inlined_data_tables idt
+	WHERE idt.table_id = %d
+)
+SELECT COUNT(*)
+FROM inlined
+JOIN {METADATA_CATALOG}.ducklake_column col ON col.table_id = inlined.table_id
+WHERE col.parent_column IS NULL
+  AND {SNAPSHOT_ID} >= col.begin_snapshot
+  AND ({SNAPSHOT_ID} < col.end_snapshot OR col.end_snapshot IS NULL)
+  AND NOT EXISTS (
+	SELECT 1
+	FROM {METADATA_CATALOG}.ducklake_column old_col
+	WHERE old_col.table_id = col.table_id AND old_col.column_id = col.column_id
+	  AND old_col.column_name = col.column_name AND old_col.column_type = col.column_type
+	  AND inlined.schema_snapshot >= old_col.begin_snapshot
+	  AND (inlined.schema_snapshot < old_col.end_snapshot OR old_col.end_snapshot IS NULL)
+  ))",
+	                          table_id.index);
+}
+
 DuckLakeCatalogInfo DuckLakeMetadataManager::GetCatalogForSnapshot(DuckLakeSnapshot snapshot) {
 	auto &ducklake_catalog = transaction.GetCatalog();
 	return BuildCatalogForSnapshot(

@@ -1,0 +1,144 @@
+# name: test/sql/rewrite_data_files/test_rewrite_superseded_inlined_table.test
+# description: rewrite_data_files with inlined data written under an earlier schema of the table
+# group: [rewrite_data_files]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+SET profiling_renderer_settings = MAP {'operator_casing': 'upper'};
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/rewrite_superseded_inlined_table', DATA_INLINING_ROW_LIMIT 3)
+
+statement ok
+USE ducklake
+
+# RENAME COLUMN: the old inlined table still names the column "s"
+statement ok
+CREATE TABLE renamed(id INTEGER, s VARCHAR)
+
+statement ok
+INSERT INTO renamed VALUES (1, 'a')
+
+statement ok
+INSERT INTO renamed SELECT i + 100, 'x' FROM range(50) t(i)
+
+statement ok
+DELETE FROM renamed WHERE id >= 100 AND id < 140
+
+statement ok
+ALTER TABLE renamed RENAME COLUMN s TO sx
+
+statement ok
+INSERT INTO renamed VALUES (2, 'b')
+
+statement ok
+CALL ducklake_rewrite_data_files('ducklake', 'renamed', delete_threshold => 0)
+
+query IIIII
+SELECT COUNT(*), MIN(id), MAX(id), MIN(sx), MAX(sx) FROM renamed
+----
+12	1	149	a	x
+
+# ADD COLUMN: the old inlined table has no "extra" column
+statement ok
+CREATE TABLE added(id INTEGER)
+
+statement ok
+INSERT INTO added VALUES (1)
+
+statement ok
+INSERT INTO added SELECT i + 100 FROM range(50) t(i)
+
+statement ok
+DELETE FROM added WHERE id >= 100 AND id < 140
+
+statement ok
+ALTER TABLE added ADD COLUMN extra INTEGER DEFAULT 7
+
+statement ok
+INSERT INTO added VALUES (2, 42)
+
+statement ok
+CALL ducklake_rewrite_data_files('ducklake', 'added', delete_threshold => 0)
+
+query IIIII
+SELECT COUNT(*), MIN(id), MAX(id), MIN(extra), MAX(extra) FROM added
+----
+12	1	149	7	42
+
+# swapping two column names in one transaction leaves names the old inlined table still resolves
+statement ok
+CREATE TABLE swapped(id INTEGER, a INTEGER, b INTEGER)
+
+statement ok
+INSERT INTO swapped VALUES (1, 1, 1000)
+
+statement ok
+INSERT INTO swapped SELECT i + 100, 50, 50 FROM range(50) t(i)
+
+statement ok
+DELETE FROM swapped WHERE id >= 140
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE swapped RENAME COLUMN a TO tmp
+
+statement ok
+ALTER TABLE swapped RENAME COLUMN b TO a
+
+statement ok
+ALTER TABLE swapped RENAME COLUMN tmp TO b
+
+statement ok
+COMMIT
+
+statement ok
+CALL ducklake_rewrite_data_files('ducklake', 'swapped', delete_threshold => 0)
+
+query IIII
+SELECT MIN(a), MAX(a), MIN(b), MAX(b) FROM swapped
+----
+50	1000	1	50
+
+query I
+SELECT COUNT(*) FROM swapped WHERE a > 500
+----
+1
+
+# SET DEFAULT keeps the inlined table's columns, so the rewrite still folds exact stats
+statement ok
+CREATE TABLE defaulted(id INTEGER, s VARCHAR)
+
+statement ok
+INSERT INTO defaulted VALUES (1, 'a')
+
+statement ok
+INSERT INTO defaulted SELECT i + 100, 'x' FROM range(50) t(i)
+
+statement ok
+DELETE FROM defaulted WHERE id >= 140
+
+statement ok
+ALTER TABLE defaulted ALTER COLUMN s SET DEFAULT 'z'
+
+statement ok
+CALL ducklake_rewrite_data_files('ducklake', 'defaulted', delete_threshold => 0)
+
+query II
+SELECT MIN(id), MAX(id) FROM defaulted
+----
+1	139
+
+query II
+EXPLAIN ANALYZE SELECT MIN(id), MAX(id) FROM defaulted
+----
+analyzed_plan	<!REGEX>:.*TABLE_SCAN.*

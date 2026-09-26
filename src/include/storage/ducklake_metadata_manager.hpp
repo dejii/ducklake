@@ -326,6 +326,7 @@ public:
 	static string GetNetInlinedRowCountSql(const string &inlined_table_name, const DuckLakeInlinedColNames &col_names);
 	static string GetTableColumnSchemaSql(TableIndex table_id);
 	static string GetInlinedTableNamesSql(TableIndex table_id);
+	static string GetChangedInlinedColumnCountSql(TableIndex table_id);
 	virtual vector<DuckLakeFileForCleanup> GetOldFilesForCleanup(const string &filter);
 	virtual vector<DuckLakeFileForCleanup> GetOrphanFilesForCleanup(const string &filter, const string &separator);
 	virtual vector<DuckLakeFileForCleanup> GetFilesForCleanup(const string &filter, CleanupType type,
