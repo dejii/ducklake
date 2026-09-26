@@ -1512,6 +1512,9 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	context.query_metadata_with_snapshot = [&](DuckLakeSnapshot s, string q) {
 		return metadata_manager->Query(s, q);
 	};
+	context.cast_inlined_column = [&](const string &column, const LogicalType &type) {
+		return metadata_manager->CastColumnToTarget(column, type);
+	};
 	context.try_append_data_files = [&](DuckLakeSnapshot &snapshot, const vector<DuckLakeFileInfo> &files,
 	                                    const vector<DuckLakeTableInfo> &new_tables,
 	                                    vector<DuckLakeSchemaInfo> &new_schemas) {

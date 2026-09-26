@@ -1,0 +1,73 @@
+# name: test/sql/rewrite_data_files/test_rewrite_inlined_stats_types.test
+# description: rewrite_data_files recomputes exact stats from inlined columns a catalog may store as text
+# group: [rewrite_data_files]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/rewrite_inlined_stats_types', DATA_INLINING_ROW_LIMIT 3)
+
+statement ok
+USE ducklake
+
+# inlined bounds whose text order differs from their value order
+statement ok
+CREATE TABLE t(id INTEGER, d DOUBLE, n DECIMAL(18, 3), u UBIGINT, dt DATE, s VARCHAR)
+
+statement ok
+INSERT INTO t VALUES (1, 9.5, 9.5, 9, DATE '2000-01-01', 'a'), (2, 100.5, 100.5, 100000, DATE '10000-01-01', 'zzé')
+
+statement ok
+INSERT INTO t SELECT i, i, i, i, DATE '5000-01-01' + i::INTEGER, 'm' || i FROM range(10, 60) t(i)
+
+statement ok
+DELETE FROM t WHERE id >= 50
+
+statement ok
+CALL ducklake_rewrite_data_files('ducklake', 't', delete_threshold => 0)
+
+query IIIIIIIIII
+SELECT MIN(d), MAX(d), MIN(n), MAX(n), MIN(u), MAX(u), MIN(dt), MAX(dt), MIN(s), MAX(s) FROM t
+----
+9.5	100.5	9.500	100.500	9	100000	2000-01-01	10000-01-01	a	zzé
+
+query II
+EXPLAIN ANALYZE SELECT MIN(d), MAX(d), MIN(n), MAX(n), MIN(u), MAX(u), MIN(dt), MAX(dt), MIN(s), MAX(s) FROM t
+----
+analyzed_plan	<!REGEX>:.*TABLE_SCAN.*
+
+# an inlined NaN is still detected
+statement ok
+CREATE TABLE nan_t(id INTEGER, v DOUBLE)
+
+statement ok
+INSERT INTO nan_t VALUES (1, 'nan'::DOUBLE), (2, 2.5)
+
+statement ok
+INSERT INTO nan_t SELECT i, i FROM range(10, 60) t(i)
+
+statement ok
+DELETE FROM nan_t WHERE id >= 50
+
+statement ok
+CALL ducklake_rewrite_data_files('ducklake', 'nan_t', delete_threshold => 0)
+
+query III
+SELECT s.min_value, s.max_value, s.contains_nan::BOOLEAN
+FROM __ducklake_metadata_ducklake.ducklake_table_column_stats s
+JOIN __ducklake_metadata_ducklake.ducklake_table t ON t.table_id = s.table_id AND t.end_snapshot IS NULL
+JOIN __ducklake_metadata_ducklake.ducklake_column c ON c.table_id = s.table_id AND c.column_id = s.column_id AND c.end_snapshot IS NULL
+WHERE t.table_name = 'nan_t' AND c.column_name = 'v'
+----
+NULL	NULL	true
+
+query III
+SELECT MIN(v), MAX(v), COUNT(*) FROM nan_t
+----
+2.5	nan	42

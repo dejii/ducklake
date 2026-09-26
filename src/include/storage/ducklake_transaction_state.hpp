@@ -51,6 +51,11 @@ struct DuckLakeCommitContext {
 	std::function<unique_ptr<QueryResult>(string)> query_metadata;
 	//! Runs a snapshot-templated metadata-DB query (handles {SNAPSHOT_ID} substitution).
 	std::function<unique_ptr<QueryResult>(DuckLakeSnapshot, string)> query_metadata_with_snapshot;
+	//! Converts an inlined-data column as stored in the metadata DB back to its logical type.
+	std::function<string(const string &, const LogicalType &)> cast_inlined_column = [](const string &column,
+	                                                                                    const LogicalType &) {
+		return column;
+	};
 	//! Optional Appender fast-path.
 	std::function<bool(DuckLakeSnapshot &, const vector<DuckLakeFileInfo> &, const vector<DuckLakeTableInfo> &,
 	                   vector<DuckLakeSchemaInfo> &)>
