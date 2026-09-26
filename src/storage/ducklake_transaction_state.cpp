@@ -962,6 +962,8 @@ void DuckLakeTransactionState::RecomputeGlobalStatsAfterRewrite(string &batch_qu
 		if (has_exactness) {
 			col_stats.min_is_exact = !row.IsNull(10) && row.GetValue<bool>(10);
 			col_stats.max_is_exact = !row.IsNull(11) && row.GetValue<bool>(11);
+			col_stats.min_known_inexact = col_stats.has_min && !row.IsNull(10) && !col_stats.min_is_exact;
+			col_stats.max_known_inexact = col_stats.has_max && !row.IsNull(11) && !col_stats.max_is_exact;
 		}
 		new_stats.MergeStats(field_idx, col_stats);
 	}

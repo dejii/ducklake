@@ -67,7 +67,8 @@ unique_ptr<DuckLakeNameMapEntry> BuildNameMapEntry(idx_t id, const std::map<idx_
 }
 
 template <class ROW>
-DuckLakeColumnStats ReadColumnStatsRow(ROW &row, idx_t base, const LogicalType &type, bool has_exactness) {
+DuckLakeColumnStats ReadColumnStatsRow(ROW &row, idx_t base, const LogicalType &type, bool has_exactness,
+                                       bool has_known_inexact) {
 	DuckLakeColumnStats s(type);
 	if (!row.IsNull(base + 0)) {
 		s.column_size_bytes = AsIdx(row, base + 0);
@@ -101,6 +102,10 @@ DuckLakeColumnStats ReadColumnStatsRow(ROW &row, idx_t base, const LogicalType &
 	if (has_exactness) {
 		s.min_is_exact = OptBoolFalse(row, base + 13);
 		s.max_is_exact = OptBoolFalse(row, base + 14);
+	}
+	if (has_known_inexact) {
+		s.min_known_inexact = OptBoolFalse(row, base + 15);
+		s.max_known_inexact = OptBoolFalse(row, base + 16);
 	}
 	return s;
 }
@@ -283,6 +288,7 @@ void DuckLakeServerSideCommit::ReadStagedDataFiles() {
 		auto stats_result = ScanStagedTable(DuckLakeStagedTableType::DATA_FILE_COLUMN_STATS);
 		// staged tables from older clients lack the min_is_exact/max_is_exact columns
 		bool has_exactness = DuckLakeMetadataManager::ResultHasColumn(*stats_result, "min_is_exact");
+		bool has_known_inexact = DuckLakeMetadataManager::ResultHasColumn(*stats_result, "min_known_inexact");
 		for (auto &row : *stats_result) {
 			DataFileIndex local_file_id(AsIdx(row, 0));
 			ColumnKey key {TableIndex(AsIdx(row, 1)), FieldIndex(AsIdx(row, 2))};
@@ -290,8 +296,8 @@ void DuckLakeServerSideCommit::ReadStagedDataFiles() {
 			if (type_it == column_types.end()) {
 				continue;
 			}
-			per_file_stats[local_file_id].emplace(key.column_id,
-			                                      ReadColumnStatsRow(row, 3, type_it->second, has_exactness));
+			per_file_stats[local_file_id].emplace(
+			    key.column_id, ReadColumnStatsRow(row, 3, type_it->second, has_exactness, has_known_inexact));
 		}
 	}
 
@@ -391,6 +397,7 @@ void DuckLakeServerSideCommit::ReadStagedInlinedData() {
 	auto stats_result = ScanStagedTable(DuckLakeStagedTableType::INLINED_COLUMN_STATS);
 	// staged tables from older clients lack the min_is_exact/max_is_exact columns
 	bool has_exactness = DuckLakeMetadataManager::ResultHasColumn(*stats_result, "min_is_exact");
+	bool has_known_inexact = DuckLakeMetadataManager::ResultHasColumn(*stats_result, "min_known_inexact");
 	map<TableIndex, map<FieldIndex, DuckLakeColumnStats>> stats_per_table;
 	for (auto &row : *stats_result) {
 		TableIndex table_id(AsIdx(row, 0));
@@ -399,7 +406,8 @@ void DuckLakeServerSideCommit::ReadStagedInlinedData() {
 		if (type_it == column_types.end()) {
 			continue;
 		}
-		stats_per_table[table_id].emplace(column_id, ReadColumnStatsRow(row, 2, type_it->second, has_exactness));
+		stats_per_table[table_id].emplace(
+		    column_id, ReadColumnStatsRow(row, 2, type_it->second, has_exactness, has_known_inexact));
 	}
 
 	// Build a DuckLakeInlinedData per table, data is null because tuples are spliced as SQL text.

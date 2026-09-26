@@ -155,7 +155,20 @@ struct DuckLakePartitionRowGroup : public PartitionRowGroup {
 	}
 
 	bool MinMaxIsExact(const StorageIndex &storage_index) override {
-		return min_max_exact;
+		if (!min_max_exact || storage_index.HasChildren()) {
+			return false;
+		}
+		auto table_stats = table.GetTableStats(context);
+		if (!table_stats) {
+			return false;
+		}
+		auto &field_id = table.GetFieldId(PhysicalIndex(storage_index.GetPrimaryIndex()));
+		auto entry = table_stats->column_stats.find(field_id.GetFieldIndex());
+		if (entry == table_stats->column_stats.end()) {
+			return false;
+		}
+		// inexact bounds are only lower/upper bounds
+		return !entry->second.min_known_inexact && !entry->second.max_known_inexact;
 	}
 
 	// DuckLakeGetPartitionStats bails out when the transaction has local changes, so

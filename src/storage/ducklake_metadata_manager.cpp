@@ -1234,10 +1234,12 @@ void TransformGlobalStatsRow(const ROW &row, vector<DuckLakeGlobalStatsInfo> &gl
 	}
 
 	if (has_exactness) {
+		column_stats.has_min_is_exact = !row.IsNull(COLUMN_STATS_START + 5);
 		column_stats.min_is_exact =
-		    !row.IsNull(COLUMN_STATS_START + 5) && row.template GetValue<bool>(COLUMN_STATS_START + 5);
+		    column_stats.has_min_is_exact && row.template GetValue<bool>(COLUMN_STATS_START + 5);
+		column_stats.has_max_is_exact = !row.IsNull(COLUMN_STATS_START + 6);
 		column_stats.max_is_exact =
-		    !row.IsNull(COLUMN_STATS_START + 6) && row.template GetValue<bool>(COLUMN_STATS_START + 6);
+		    column_stats.has_max_is_exact && row.template GetValue<bool>(COLUMN_STATS_START + 6);
 	}
 
 	stats_entry.column_stats.push_back(std::move(column_stats));

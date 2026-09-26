@@ -44,6 +44,8 @@ DuckLakeColumnStats::DuckLakeColumnStats(const DuckLakeColumnStats &other) {
 	has_contains_nan = other.has_contains_nan;
 	min_is_exact = other.min_is_exact;
 	max_is_exact = other.max_is_exact;
+	min_known_inexact = other.min_known_inexact;
+	max_known_inexact = other.max_known_inexact;
 
 	if (other.extra_stats) {
 		extra_stats = other.extra_stats->Copy();
@@ -70,6 +72,8 @@ DuckLakeColumnStats &DuckLakeColumnStats::operator=(const DuckLakeColumnStats &o
 	has_contains_nan = other.has_contains_nan;
 	min_is_exact = other.min_is_exact;
 	max_is_exact = other.max_is_exact;
+	min_known_inexact = other.min_known_inexact;
+	max_known_inexact = other.max_known_inexact;
 
 	if (other.extra_stats) {
 		extra_stats = other.extra_stats->Copy();
@@ -101,6 +105,8 @@ DuckLakeColumnStats DuckLakeColumnStats::FromGlobalStats(const LogicalType &type
 	}
 	stats.min_is_exact = col.min_is_exact;
 	stats.max_is_exact = col.max_is_exact;
+	stats.min_known_inexact = col.has_min && col.has_min_is_exact && !col.min_is_exact;
+	stats.max_known_inexact = col.has_max && col.has_max_is_exact && !col.max_is_exact;
 	stats.any_valid = stats.has_min || stats.has_max || col.has_extra_stats;
 	// absent bounds on nonempty tables are unknown
 	stats.bounds_unknown = !stats.any_valid && table_has_rows;
@@ -117,6 +123,8 @@ void DuckLakeColumnStats::ClearBounds() {
 	has_max = false;
 	min_is_exact = false;
 	max_is_exact = false;
+	min_known_inexact = false;
+	max_known_inexact = false;
 	contains_nan = false;
 	has_contains_nan = false;
 }
@@ -175,9 +183,11 @@ void DuckLakeColumnStats::MergeStats(const DuckLakeColumnStats &new_stats) {
 		min = new_stats.min;
 		has_min = new_stats.has_min;
 		min_is_exact = new_stats.min_is_exact;
+		min_known_inexact = new_stats.min_known_inexact;
 		max = new_stats.max;
 		has_max = new_stats.has_max;
 		max_is_exact = new_stats.max_is_exact;
+		max_known_inexact = new_stats.max_known_inexact;
 		any_valid = true;
 		return;
 	}
@@ -198,15 +208,19 @@ void DuckLakeColumnStats::MergeStats(const DuckLakeColumnStats &new_stats) {
 				if (new_min < current_min) {
 					min = new_stats.min;
 					min_is_exact = new_stats.min_is_exact;
+					min_known_inexact = new_stats.min_known_inexact;
 				} else if (new_min == current_min) {
 					min_is_exact = min_is_exact && new_stats.min_is_exact;
+					min_known_inexact = min_known_inexact && new_stats.min_known_inexact;
 				}
 			} else if (new_stats.min < min) {
 				// for other types we can compare the strings directly
 				min = new_stats.min;
 				min_is_exact = new_stats.min_is_exact;
+				min_known_inexact = new_stats.min_known_inexact;
 			} else if (new_stats.min == min) {
 				min_is_exact = min_is_exact && new_stats.min_is_exact;
+				min_known_inexact = min_known_inexact && new_stats.min_known_inexact;
 			}
 		}
 
@@ -221,15 +235,19 @@ void DuckLakeColumnStats::MergeStats(const DuckLakeColumnStats &new_stats) {
 				if (new_max > current_max) {
 					max = new_stats.max;
 					max_is_exact = new_stats.max_is_exact;
+					max_known_inexact = new_stats.max_known_inexact;
 				} else if (new_max == current_max) {
 					max_is_exact = max_is_exact && new_stats.max_is_exact;
+					max_known_inexact = max_known_inexact && new_stats.max_known_inexact;
 				}
 			} else if (new_stats.max > max) {
 				// for other types we can compare the strings directly
 				max = new_stats.max;
 				max_is_exact = new_stats.max_is_exact;
+				max_known_inexact = new_stats.max_known_inexact;
 			} else if (new_stats.max == max) {
 				max_is_exact = max_is_exact && new_stats.max_is_exact;
+				max_known_inexact = max_known_inexact && new_stats.max_known_inexact;
 			}
 		}
 	}

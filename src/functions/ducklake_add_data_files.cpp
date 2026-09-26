@@ -472,12 +472,14 @@ FROM parquet_full_metadata(%s)
 				stats.min = stats_min_data[metadata_idx].GetString();
 				// files without the footer flag conservatively count as truncated
 				stats.min_is_exact = min_is_exact_validity.RowIsValid(metadata_idx) && min_is_exact_data[metadata_idx];
+				stats.min_known_inexact = min_is_exact_validity.RowIsValid(metadata_idx) && !stats.min_is_exact;
 			}
 
 			if (!column.skip_bounds && stats_max_validity.RowIsValid(metadata_idx)) {
 				stats.has_max = true;
 				stats.max = stats_max_data[metadata_idx].GetString();
 				stats.max_is_exact = max_is_exact_validity.RowIsValid(metadata_idx) && max_is_exact_data[metadata_idx];
+				stats.max_known_inexact = max_is_exact_validity.RowIsValid(metadata_idx) && !stats.max_is_exact;
 			}
 
 			if (stats_null_count_validity.RowIsValid(metadata_idx)) {
@@ -1102,15 +1104,19 @@ void DuckLakeFileProcessor::MapColumnStats(ParquetFileMetadata &file_metadata, D
 						if (stats_min_val < numeric_min_cache) {
 							aggregated.min = stats.min;
 							aggregated.min_is_exact = stats.min_is_exact;
+							aggregated.min_known_inexact = stats.min_known_inexact;
 							numeric_min_cache = std::move(stats_min_val);
 						} else if (stats_min_val == numeric_min_cache) {
 							aggregated.min_is_exact = aggregated.min_is_exact && stats.min_is_exact;
+							aggregated.min_known_inexact = aggregated.min_known_inexact && stats.min_known_inexact;
 						}
 					} else if (stats.min < aggregated.min) {
 						aggregated.min = stats.min;
 						aggregated.min_is_exact = stats.min_is_exact;
+						aggregated.min_known_inexact = stats.min_known_inexact;
 					} else if (stats.min == aggregated.min) {
 						aggregated.min_is_exact = aggregated.min_is_exact && stats.min_is_exact;
+						aggregated.min_known_inexact = aggregated.min_known_inexact && stats.min_known_inexact;
 					}
 				}
 			}
@@ -1132,15 +1138,19 @@ void DuckLakeFileProcessor::MapColumnStats(ParquetFileMetadata &file_metadata, D
 						if (stats_max_val > numeric_max_cache) {
 							aggregated.max = stats.max;
 							aggregated.max_is_exact = stats.max_is_exact;
+							aggregated.max_known_inexact = stats.max_known_inexact;
 							numeric_max_cache = std::move(stats_max_val);
 						} else if (stats_max_val == numeric_max_cache) {
 							aggregated.max_is_exact = aggregated.max_is_exact && stats.max_is_exact;
+							aggregated.max_known_inexact = aggregated.max_known_inexact && stats.max_known_inexact;
 						}
 					} else if (stats.max > aggregated.max) {
 						aggregated.max = stats.max;
 						aggregated.max_is_exact = stats.max_is_exact;
+						aggregated.max_known_inexact = stats.max_known_inexact;
 					} else if (stats.max == aggregated.max) {
 						aggregated.max_is_exact = aggregated.max_is_exact && stats.max_is_exact;
+						aggregated.max_known_inexact = aggregated.max_known_inexact && stats.max_known_inexact;
 					}
 				}
 			}

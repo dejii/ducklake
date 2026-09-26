@@ -1,0 +1,192 @@
+# name: test/sql/stats/min_max_optimization_inexact_bounds.test
+# description: MIN/MAX is not folded from table stats whose bounds the catalog marks as inexact
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+SET profiling_renderer_settings = MAP {'operator_casing': 'upper'};
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/min_max_inexact', DUCKLAKE_VERSION '1.1-dev1')
+
+statement ok
+CREATE TABLE ducklake.t(i INTEGER, j INTEGER);
+
+statement ok
+INSERT INTO ducklake.t SELECT r, r FROM range(5, 91) t(r);
+
+statement ok
+CREATE TABLE ducklake.other(i INTEGER);
+
+statement ok
+SET VARIABLE t_id = (SELECT table_id FROM __ducklake_metadata_ducklake.ducklake_table WHERE table_name = 't')
+
+# the stored bounds are exact: MIN/MAX fold from metadata
+query II
+SELECT MIN(i), MAX(i) FROM ducklake.t;
+----
+5	90
+
+query II
+EXPLAIN ANALYZE SELECT MIN(i), MAX(i) FROM ducklake.t;
+----
+analyzed_plan	<!REGEX>:.*TABLE_SCAN.*
+
+# another writer widens the lower bound of i and marks it inexact
+statement ok
+UPDATE __ducklake_metadata_ducklake.ducklake_table_column_stats SET min_value = '-82', min_is_exact = false
+WHERE table_id = getvariable('t_id') AND column_id = 1
+
+# commit an unrelated change so the stats are re-read from the catalog
+statement ok
+INSERT INTO ducklake.other VALUES (1);
+
+query II
+SELECT MIN(i), MAX(i) FROM ducklake.t;
+----
+5	90
+
+query II
+EXPLAIN ANALYZE SELECT MIN(i) FROM ducklake.t;
+----
+analyzed_plan	<REGEX>:.*TABLE_SCAN.*
+
+# the bound is still a valid lower bound for pruning
+query I
+SELECT COUNT(*) FROM ducklake.t WHERE i < 10;
+----
+5
+
+# columns whose bounds are exact still fold
+query II
+EXPLAIN ANALYZE SELECT MIN(j), MAX(j) FROM ducklake.t;
+----
+analyzed_plan	<!REGEX>:.*TABLE_SCAN.*
+
+# an insert that leaves the lower bound in place keeps it marked inexact
+statement ok
+INSERT INTO ducklake.t VALUES (50, 50);
+
+query TTTT
+SELECT min_value, max_value, min_is_exact::BOOLEAN, max_is_exact::BOOLEAN
+FROM __ducklake_metadata_ducklake.ducklake_table_column_stats
+WHERE table_id = getvariable('t_id') AND column_id = 1
+----
+-82	90	false	true
+
+query II
+SELECT MIN(i), MAX(i) FROM ducklake.t;
+----
+5	90
+
+# an insert below the inexact bound replaces it with an exact one
+statement ok
+INSERT INTO ducklake.t VALUES (-100, -100);
+
+query TTTT
+SELECT min_value, max_value, min_is_exact::BOOLEAN, max_is_exact::BOOLEAN
+FROM __ducklake_metadata_ducklake.ducklake_table_column_stats
+WHERE table_id = getvariable('t_id') AND column_id = 1
+----
+-100	90	true	true
+
+query II
+SELECT MIN(i), MAX(i) FROM ducklake.t;
+----
+-100	90
+
+query II
+EXPLAIN ANALYZE SELECT MIN(i), MAX(i) FROM ducklake.t;
+----
+analyzed_plan	<!REGEX>:.*TABLE_SCAN.*
+
+# a rewrite keeps an inexact file bound inexact
+statement ok
+CREATE TABLE ducklake.r(i INTEGER);
+
+statement ok
+SET VARIABLE r_id = (SELECT table_id FROM __ducklake_metadata_ducklake.ducklake_table WHERE table_name = 'r')
+
+statement ok
+INSERT INTO ducklake.r SELECT r FROM range(5, 51) t(r);
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+statement ok
+INSERT INTO ducklake.r SELECT r FROM range(51, 91) t(r);
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+statement ok
+UPDATE __ducklake_metadata_ducklake.ducklake_file_column_stats SET min_value = '-82', min_is_exact = false
+WHERE table_id = getvariable('r_id') AND data_file_id = (
+	SELECT MIN(data_file_id) FROM __ducklake_metadata_ducklake.ducklake_data_file WHERE table_id = getvariable('r_id'))
+
+statement ok
+DELETE FROM ducklake.r WHERE i = 90;
+
+statement ok
+CALL ducklake_rewrite_data_files('ducklake', 'r', delete_threshold => 0);
+
+query TTTT
+SELECT min_value, max_value, min_is_exact::BOOLEAN, max_is_exact::BOOLEAN
+FROM __ducklake_metadata_ducklake.ducklake_table_column_stats
+WHERE table_id = getvariable('r_id')
+----
+-82	89	false	true
+
+query III
+SELECT MIN(i), MAX(i), COUNT(*) FROM ducklake.r;
+----
+5	89	85
+
+# a Parquet file whose footer marks its lower bound of i (-82) inexact; its rows are 5..90
+statement ok
+CREATE TABLE ducklake.a(i INTEGER);
+
+statement ok
+SET VARIABLE a_id = (SELECT table_id FROM __ducklake_metadata_ducklake.ducklake_table WHERE table_name = 'a')
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'a', 'data/parquet/inexact_int_min.parquet')
+
+query TTTT
+SELECT min_value, max_value, min_is_exact::BOOLEAN, max_is_exact::BOOLEAN
+FROM __ducklake_metadata_ducklake.ducklake_table_column_stats
+WHERE table_id = getvariable('a_id')
+----
+-82	90	false	true
+
+query III
+SELECT MIN(i), MAX(i), COUNT(*) FROM ducklake.a;
+----
+5	90	86
+
+# a 1.0 catalog records no exactness: MIN/MAX still fold there
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/min_max_inexact_v10.db' AS ducklake10 (DATA_PATH '{DATA_PATH}/min_max_inexact_v10', DUCKLAKE_VERSION '1.0')
+
+statement ok
+CREATE TABLE ducklake10.t(i INTEGER);
+
+statement ok
+INSERT INTO ducklake10.t FROM range(5, 91);
+
+query II
+SELECT MIN(i), MAX(i) FROM ducklake10.t;
+----
+5	90
+
+query II
+EXPLAIN ANALYZE SELECT MIN(i), MAX(i) FROM ducklake10.t;
+----
+analyzed_plan	<!REGEX>:.*TABLE_SCAN.*
