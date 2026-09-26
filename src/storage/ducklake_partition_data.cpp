@@ -91,6 +91,23 @@ static string GetEpochTransformPart(DuckLakeTransformType transform_type) {
 	}
 }
 
+//! SQL counterpart of FloorNanosToMicros
+static string FloorNanosToMicrosSQL(const string &col_name) {
+	string nanos = "epoch_ns(" + col_name + ")";
+	return "make_timestamp((" + nanos + " - ((" + nanos + " % 1000) + 1000) % 1000) // 1000)";
+}
+
+//! SQL counterpart of ConvertTimestampTzToUtcInstant
+static string ConvertTimestampTzToUtcInstantSQL(const string &col_name, LogicalTypeId source_id) {
+	if (source_id == LogicalTypeId::TIMESTAMP_TZ_NS) {
+		return FloorNanosToMicrosSQL(col_name);
+	}
+	if (source_id == LogicalTypeId::TIMESTAMP_TZ) {
+		return "make_timestamp(epoch_us(" + col_name + "))";
+	}
+	return col_name;
+}
+
 string DuckLakePartitionUtils::GetPartitionSQLExpression(const DuckLakeTransform &transform, const string &col_name,
                                                          const LogicalType &source_type) {
 	if (transform.type == DuckLakeTransformType::IDENTITY) {
@@ -102,19 +119,16 @@ string DuckLakePartitionUtils::GetPartitionSQLExpression(const DuckLakeTransform
 	}
 	if (IsEpochTransform(transform.type)) {
 		// Must mirror ApplyPartitionTransform exactly
-		string col_expr = col_name;
-		auto source_id = source_type.id();
-		if (source_id == LogicalTypeId::TIMESTAMP_NS || source_id == LogicalTypeId::TIMESTAMP_TZ_NS) {
-			string nanos = "epoch_ns(" + col_name + ")";
-			col_expr = "make_timestamp((" + nanos + " - ((" + nanos + " % 1000) + 1000) % 1000) // 1000)";
-		} else if (source_id == LogicalTypeId::TIMESTAMP_TZ) {
-			col_expr = "make_timestamp(epoch_us(" + col_expr + "))";
-		}
+		auto col_expr = source_type.id() == LogicalTypeId::TIMESTAMP_NS
+		                    ? FloorNanosToMicrosSQL(col_name)
+		                    : ConvertTimestampTzToUtcInstantSQL(col_name, source_type.id());
 		return "date_diff('" + GetEpochTransformPart(transform.type) + "', DATE '1970-01-01', " + col_expr + ")";
 	}
+	// Must mirror ApplyPartitionTransform exactly
+	auto col_expr = ConvertTimestampTzToUtcInstantSQL(col_name, source_type.id());
 	case_insensitive_set_t used_names;
 	string func_name = GetPartitionKeyName(transform.type, col_name, used_names);
-	return func_name + "(" + col_name + ")";
+	return func_name + "(" + col_expr + ")";
 }
 
 LogicalType DuckLakePartitionUtils::GetPartitionKeyType(DuckLakeTransformType transform_type,
@@ -255,16 +269,27 @@ static unique_ptr<Expression> FloorNanosToMicros(ClientContext &context, unique_
 	return DuckLakePartitionUtils::ApplyScalarFunction(context, "make_timestamp", std::move(micros));
 }
 
+//! Transforms on a TIMESTAMPTZ are computed on the UTC instant, independent of the session TimeZone
+static unique_ptr<Expression> ConvertTimestampTzToUtcInstant(ClientContext &context,
+                                                             unique_ptr<Expression> column_expr) {
+	auto source_id = column_expr->GetReturnType().id();
+	if (source_id == LogicalTypeId::TIMESTAMP_TZ_NS) {
+		return FloorNanosToMicros(context, std::move(column_expr));
+	}
+	if (source_id == LogicalTypeId::TIMESTAMP_TZ) {
+		column_expr = DuckLakePartitionUtils::ApplyScalarFunction(context, "epoch_us", std::move(column_expr));
+		return DuckLakePartitionUtils::ApplyScalarFunction(context, "make_timestamp", std::move(column_expr));
+	}
+	return column_expr;
+}
+
 static unique_ptr<Expression> ApplyEpochTransform(ClientContext &context, unique_ptr<Expression> column_expr,
                                                   DuckLakeTransformType transform_type) {
-	auto source_id = column_expr->GetReturnType().id();
-	if (source_id == LogicalTypeId::TIMESTAMP_NS || source_id == LogicalTypeId::TIMESTAMP_TZ_NS) {
+	if (column_expr->GetReturnType().id() == LogicalTypeId::TIMESTAMP_NS) {
 		// the implicit cast to microseconds rounds, Iceberg requires flooring
 		column_expr = FloorNanosToMicros(context, std::move(column_expr));
-	} else if (source_id == LogicalTypeId::TIMESTAMP_TZ) {
-		// Iceberg computes epoch transforms on the UTC instant
-		column_expr = DuckLakePartitionUtils::ApplyScalarFunction(context, "epoch_us", std::move(column_expr));
-		column_expr = DuckLakePartitionUtils::ApplyScalarFunction(context, "make_timestamp", std::move(column_expr));
+	} else {
+		column_expr = ConvertTimestampTzToUtcInstant(context, std::move(column_expr));
 	}
 	vector<unique_ptr<Expression>> children;
 	children.push_back(make_uniq<BoundConstantExpression>(Value(GetEpochTransformPart(transform_type))));
@@ -287,13 +312,13 @@ unique_ptr<Expression> DuckLakePartitionUtils::ApplyPartitionTransform(ClientCon
 	case DuckLakeTransformType::IDENTITY:
 		return column_expr;
 	case DuckLakeTransformType::YEAR:
-		return ApplyScalarFunction(context, "year", std::move(column_expr));
+		return ApplyScalarFunction(context, "year", ConvertTimestampTzToUtcInstant(context, std::move(column_expr)));
 	case DuckLakeTransformType::MONTH:
-		return ApplyScalarFunction(context, "month", std::move(column_expr));
+		return ApplyScalarFunction(context, "month", ConvertTimestampTzToUtcInstant(context, std::move(column_expr)));
 	case DuckLakeTransformType::DAY:
-		return ApplyScalarFunction(context, "day", std::move(column_expr));
+		return ApplyScalarFunction(context, "day", ConvertTimestampTzToUtcInstant(context, std::move(column_expr)));
 	case DuckLakeTransformType::HOUR:
-		return ApplyScalarFunction(context, "hour", std::move(column_expr));
+		return ApplyScalarFunction(context, "hour", ConvertTimestampTzToUtcInstant(context, std::move(column_expr)));
 	case DuckLakeTransformType::EPOCH_YEAR:
 	case DuckLakeTransformType::EPOCH_MONTH:
 	case DuckLakeTransformType::EPOCH_DAY:

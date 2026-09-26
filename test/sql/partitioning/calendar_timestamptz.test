@@ -1,0 +1,138 @@
+# name: test/sql/partitioning/calendar_timestamptz.test
+# description: year/month/day/hour partitioning transforms on TIMESTAMPTZ are session-timezone independent
+# group: [partitioning]
+
+require ducklake
+
+require parquet
+
+require icu
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_calendar_tstz', METADATA_CATALOG 'ducklake_metadata')
+
+statement ok
+USE ducklake
+
+statement ok
+CREATE TABLE tz_tbl(id INTEGER, ts TIMESTAMPTZ);
+
+statement ok
+ALTER TABLE tz_tbl SET PARTITIONED BY (year(ts), month(ts), day(ts), hour(ts));
+
+# 2020-01-01 05:00:00+02 is 2020-01-01 03:00:00 UTC, but 2019-12-31 19:00:00 in America/Los_Angeles
+# (winter, UTC-8) - the offset crosses a day (and month, and year) boundary, so year/month/day/hour
+# all disagree between the two writer sessions unless the transform is computed on the UTC instant
+# large insert writes parquet directly (transform evaluated in the write plan)
+statement ok
+SET TimeZone = 'UTC';
+
+statement ok
+INSERT INTO tz_tbl SELECT i, TIMESTAMPTZ '2020-01-01 05:00:00+02' FROM range(12) t(i);
+
+# small insert is inlined and flushed below (transform evaluated as SQL over the metadata catalog)
+statement ok
+SET TimeZone = 'America/Los_Angeles';
+
+statement ok
+INSERT INTO tz_tbl VALUES (100, TIMESTAMPTZ '2020-01-01 05:00:00+02');
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+# every writer must agree on the partition key for the same instant, regardless of session TimeZone
+query I
+SELECT DISTINCT partition_value FROM ducklake_metadata.ducklake_file_partition_value
+WHERE table_id = (SELECT table_id FROM ducklake_metadata.ducklake_table WHERE table_name = 'tz_tbl' AND end_snapshot IS NULL)
+  AND partition_key_index = 0
+----
+2020
+
+query I
+SELECT DISTINCT partition_value FROM ducklake_metadata.ducklake_file_partition_value
+WHERE table_id = (SELECT table_id FROM ducklake_metadata.ducklake_table WHERE table_name = 'tz_tbl' AND end_snapshot IS NULL)
+  AND partition_key_index = 1
+----
+1
+
+query I
+SELECT DISTINCT partition_value FROM ducklake_metadata.ducklake_file_partition_value
+WHERE table_id = (SELECT table_id FROM ducklake_metadata.ducklake_table WHERE table_name = 'tz_tbl' AND end_snapshot IS NULL)
+  AND partition_key_index = 2
+----
+1
+
+query I
+SELECT DISTINCT partition_value FROM ducklake_metadata.ducklake_file_partition_value
+WHERE table_id = (SELECT table_id FROM ducklake_metadata.ducklake_table WHERE table_name = 'tz_tbl' AND end_snapshot IS NULL)
+  AND partition_key_index = 3
+----
+3
+
+query I
+SELECT COUNT(DISTINCT regexp_extract(path, '.*year=(-?[0-9]+)[/\\].*', 1)) FROM glob('{DATA_PATH}/ducklake_calendar_tstz/main/tz_tbl/**') t(path)
+----
+1
+
+query I
+SELECT COUNT(*) FROM tz_tbl
+----
+13
+
+# year() on a BC TIMESTAMPTZ must return the astronomical year, like it does on TIMESTAMP/DATE,
+# not DuckDB's internal BC-era ordinal
+statement ok
+CREATE TABLE bc_tbl(id INTEGER, ts TIMESTAMPTZ);
+
+statement ok
+ALTER TABLE bc_tbl SET PARTITIONED BY (year(ts));
+
+statement ok
+INSERT INTO bc_tbl VALUES (1, TIMESTAMPTZ '-100-06-15 12:00:00+00');
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+query I
+SELECT DISTINCT partition_value FROM ducklake_metadata.ducklake_file_partition_value
+WHERE table_id = (SELECT table_id FROM ducklake_metadata.ducklake_table WHERE table_name = 'bc_tbl' AND end_snapshot IS NULL)
+----
+-100
+
+# TIMESTAMPTZ_NS is floored to the microsecond, then computed on the UTC instant
+statement ok
+CREATE TABLE tzns_tbl(id INTEGER, ts TIMESTAMPTZ_NS);
+
+statement ok
+ALTER TABLE tzns_tbl SET PARTITIONED BY (year(ts), month(ts), day(ts), hour(ts));
+
+statement ok
+SET TimeZone = 'America/Los_Angeles';
+
+statement ok
+INSERT INTO tzns_tbl SELECT i, TIMESTAMPTZ_NS '2020-12-31 23:59:59.9999995+00' FROM range(12) t(i);
+
+statement ok
+INSERT INTO tzns_tbl VALUES (100, TIMESTAMPTZ_NS '2020-12-31 23:59:59.9999995+00');
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+query II
+SELECT DISTINCT partition_key_index, partition_value FROM ducklake_metadata.ducklake_file_partition_value
+WHERE table_id = (SELECT table_id FROM ducklake_metadata.ducklake_table WHERE table_name = 'tzns_tbl' AND end_snapshot IS NULL)
+ORDER BY ALL
+----
+0	2020
+1	12
+2	31
+3	23
+
+query I
+SELECT COUNT(*) FROM tzns_tbl
+----
+13
