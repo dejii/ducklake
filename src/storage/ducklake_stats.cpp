@@ -95,6 +95,8 @@ DuckLakeColumnStats DuckLakeColumnStats::FromGlobalStats(const LogicalType &type
 	}
 	stats.min_is_exact = col.min_is_exact;
 	stats.max_is_exact = col.max_is_exact;
+	stats.min_known_inexact = col.has_min && col.has_min_is_exact && !col.min_is_exact;
+	stats.max_known_inexact = col.has_max && col.has_max_is_exact && !col.max_is_exact;
 	stats.any_valid = stats.has_min || stats.has_max || col.has_extra_stats;
 	// absent bounds on nonempty tables are unknown
 	stats.bounds_unknown = !stats.any_valid && table_has_rows;
@@ -126,12 +128,14 @@ void DuckLakeColumnStats::CopyMinFrom(const DuckLakeColumnStats &other) {
 	min = other.min;
 	has_min = other.has_min;
 	min_is_exact = other.min_is_exact;
+	min_known_inexact = other.min_known_inexact;
 }
 
 void DuckLakeColumnStats::CopyMaxFrom(const DuckLakeColumnStats &other) {
 	max = other.max;
 	has_max = other.has_max;
 	max_is_exact = other.max_is_exact;
+	max_known_inexact = other.max_known_inexact;
 }
 
 void DuckLakeMissingField::Collect(const DuckLakeFieldId &field_id, bool reads_null, bool repeated,
@@ -172,6 +176,8 @@ void DuckLakeColumnStats::ClearBounds() {
 	has_max = false;
 	min_is_exact = false;
 	max_is_exact = false;
+	min_known_inexact = false;
+	max_known_inexact = false;
 	contains_nan = false;
 	has_contains_nan = false;
 }
@@ -268,9 +274,11 @@ void DuckLakeColumnStats::MergeBound(const DuckLakeColumnStats &new_stats, bool 
 	auto &has_bound = is_min ? has_min : has_max;
 	auto &bound = is_min ? min : max;
 	auto &bound_is_exact = is_min ? min_is_exact : max_is_exact;
+	auto &bound_known_inexact = is_min ? min_known_inexact : max_known_inexact;
 	auto &new_bound = is_min ? new_stats.min : new_stats.max;
 	auto new_has_bound = is_min ? new_stats.has_min : new_stats.has_max;
 	auto new_bound_is_exact = is_min ? new_stats.min_is_exact : new_stats.max_is_exact;
+	auto new_bound_known_inexact = is_min ? new_stats.min_known_inexact : new_stats.max_known_inexact;
 	if (!new_has_bound) {
 		has_bound = false;
 		return;
@@ -285,9 +293,11 @@ void DuckLakeColumnStats::MergeBound(const DuckLakeColumnStats &new_stats, bool 
 	}
 	if (comparison == 0) {
 		bound_is_exact = bound_is_exact && new_bound_is_exact;
+		bound_known_inexact = bound_known_inexact && new_bound_known_inexact;
 	} else if ((comparison < 0) == is_min) {
 		bound = new_bound;
 		bound_is_exact = new_bound_is_exact;
+		bound_known_inexact = new_bound_known_inexact;
 	}
 }
 

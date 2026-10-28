@@ -430,6 +430,7 @@ FROM parquet_full_metadata(%s)
 				// files without the footer flag conservatively count as truncated
 				auto min_is_exact = stats_entry.GetChildValue<8>();
 				stats.min_is_exact = min_is_exact.IsValid() && min_is_exact.GetValue();
+				stats.min_known_inexact = min_is_exact.IsValid() && !stats.min_is_exact;
 			}
 
 			auto stats_max = stats_entry.GetChildValue<2>();
@@ -438,6 +439,7 @@ FROM parquet_full_metadata(%s)
 				stats.max = stats_max.GetValue().GetString();
 				auto max_is_exact = stats_entry.GetChildValue<9>();
 				stats.max_is_exact = max_is_exact.IsValid() && max_is_exact.GetValue();
+				stats.max_known_inexact = max_is_exact.IsValid() && !stats.max_is_exact;
 			}
 			if (check_bounds) {
 				auto dropped_value = stats.CastBoundsFrom(column.bounds_type);

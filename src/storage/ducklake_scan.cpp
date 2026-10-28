@@ -147,12 +147,14 @@ vector<column_t> DuckLakeGetRowIdColumn(ClientContext &context, optional_ptr<Fun
 // DuckDB's StatisticsPropagator::TryExecuteAggregates folds MIN(col)/MAX(col) over a single scan into a
 // constant when the partition exposes (exact) column statistics through this interface.
 struct DuckLakePartitionRowGroup : public PartitionRowGroup {
-	DuckLakePartitionRowGroup(ClientContext &context, DuckLakeTableEntry &table, bool min_max_exact)
-	    : context(context), table(table), min_max_exact(min_max_exact) {
+	DuckLakePartitionRowGroup(ClientContext &context, DuckLakeTableEntry &table,
+	                          shared_ptr<DuckLakeTableStats> table_stats, bool min_max_exact)
+	    : context(context), table(table), table_stats(std::move(table_stats)), min_max_exact(min_max_exact) {
 	}
 
 	ClientContext &context;
 	DuckLakeTableEntry &table;
+	shared_ptr<DuckLakeTableStats> table_stats;
 	bool min_max_exact;
 
 	unique_ptr<BaseStatistics> GetColumnStatistics(const StorageIndex &storage_index) override {
@@ -164,7 +166,17 @@ struct DuckLakePartitionRowGroup : public PartitionRowGroup {
 	}
 
 	bool MinMaxIsExact(const StorageIndex &storage_index) override {
-		return min_max_exact;
+		auto column_id = storage_index.GetPrimaryIndex();
+		if (!min_max_exact || storage_index.HasChildren() || IsVirtualColumn(column_id)) {
+			return false;
+		}
+		auto &field_id = table.GetFieldId(PhysicalIndex(column_id));
+		auto entry = table_stats->column_stats.find(field_id.GetFieldIndex());
+		if (entry == table_stats->column_stats.end()) {
+			return false;
+		}
+		// inexact bounds are only lower/upper bounds
+		return !entry->second.min_known_inexact && !entry->second.max_known_inexact;
 	}
 
 	// DuckLakeGetPartitionStats bails out when the transaction has local changes, so
@@ -226,7 +238,7 @@ vector<PartitionStatistics> DuckLakeGetPartitionStats(ClientContext &context, Ge
 	PartitionStatistics stats;
 	stats.count = net_count;
 	stats.count_type = CountType::COUNT_EXACT;
-	stats.partition_row_group = make_shared_ptr<DuckLakePartitionRowGroup>(context, table, min_max_exact);
+	stats.partition_row_group = make_shared_ptr<DuckLakePartitionRowGroup>(context, table, table_stats, min_max_exact);
 	result.push_back(std::move(stats));
 	return result;
 }

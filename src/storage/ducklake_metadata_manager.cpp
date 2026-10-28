@@ -1463,7 +1463,9 @@ static void TransformGlobalStatsRow(const QueryResultRow &row, vector<DuckLakeGl
 	column_stats.has_max = TryReadValue(row, COLUMN_STATS_START + 3, column_stats.max_val);
 	column_stats.has_extra_stats = TryReadValue(row, COLUMN_STATS_START + 4, column_stats.extra_stats);
 	if (has_exactness) {
+		column_stats.has_min_is_exact = !row.IsNull(COLUMN_STATS_START + 5);
 		column_stats.min_is_exact = OptBoolFalse(row, COLUMN_STATS_START + 5);
+		column_stats.has_max_is_exact = !row.IsNull(COLUMN_STATS_START + 6);
 		column_stats.max_is_exact = OptBoolFalse(row, COLUMN_STATS_START + 6);
 	}
 
