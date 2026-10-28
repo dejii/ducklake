@@ -103,3 +103,102 @@ could not find schema that corresponds to the view entry "v"
 
 statement ok
 DETACH dl
+
+# a struct column without child columns
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/inconsistent_struct.db' AS dl (DATA_PATH '{DATA_PATH}/inconsistent_struct')
+
+statement ok
+CREATE TABLE dl.good AS SELECT 1 AS i
+
+statement ok
+CREATE TABLE dl.t (s STRUCT(a INTEGER))
+
+statement ok
+DELETE FROM __ducklake_metadata_dl.ducklake_column WHERE column_name = 'a'
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/inconsistent_struct.db' AS dl
+
+statement error
+SELECT * FROM dl.good
+----
+Structs must have at least one child entry
+
+statement ok
+DETACH dl
+
+# a struct without child columns inside a list
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/inconsistent_list_struct.db' AS dl (DATA_PATH '{DATA_PATH}/inconsistent_list_struct')
+
+statement ok
+CREATE TABLE dl.t (l STRUCT(a INTEGER)[])
+
+statement ok
+DELETE FROM __ducklake_metadata_dl.ducklake_column WHERE column_name = 'a'
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/inconsistent_list_struct.db' AS dl
+
+statement error
+SELECT * FROM dl.t
+----
+Structs must have at least one child entry
+
+statement ok
+DETACH dl
+
+# a list column without a child column
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/inconsistent_list.db' AS dl (DATA_PATH '{DATA_PATH}/inconsistent_list')
+
+statement ok
+CREATE TABLE dl.t (l INTEGER[])
+
+statement ok
+DELETE FROM __ducklake_metadata_dl.ducklake_column WHERE parent_column IS NOT NULL
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/inconsistent_list.db' AS dl
+
+statement error
+SELECT * FROM dl.t
+----
+Lists must have a single child entry
+
+statement ok
+DETACH dl
+
+# a map column without child columns
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/inconsistent_map.db' AS dl (DATA_PATH '{DATA_PATH}/inconsistent_map')
+
+statement ok
+CREATE TABLE dl.t (m MAP(INTEGER, VARCHAR))
+
+statement ok
+DELETE FROM __ducklake_metadata_dl.ducklake_column WHERE parent_column IS NOT NULL
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/inconsistent_map.db' AS dl
+
+statement error
+SELECT * FROM dl.t
+----
+Maps must have two child entries
+
+statement ok
+DETACH dl

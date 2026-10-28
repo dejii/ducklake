@@ -533,7 +533,7 @@ static unique_ptr<DuckLakeFieldId> TransformColumnType(const DuckLakeColumnInfo 
 	DuckLakeColumnData col_data;
 	col_data.id = col.id;
 	if (col.children.empty()) {
-		auto col_type = DuckLakeTypes::FromString(col.type);
+		auto col_type = DuckLakeTypes::FromColumnInfo(col);
 		col_data.initial_default = col.initial_default.DefaultCastAs(col_type);
 		if (col.default_value.IsNull()) {
 			col_data.default_value = ConstantExpression::Null();

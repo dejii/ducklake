@@ -131,6 +131,9 @@ LogicalType DuckLakeTypes::FromColumnInfo(const DuckLakeColumnInfo &col) {
 	auto type = FromString(col.type);
 	switch (type.id()) {
 	case LogicalTypeId::STRUCT: {
+		if (col.children.empty()) {
+			throw InvalidInputException("Structs must have at least one child entry");
+		}
 		child_list_t<LogicalType> child_types;
 		for (auto &child : col.children) {
 			child_types.emplace_back(child.name, FromColumnInfo(child));
