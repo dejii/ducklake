@@ -45,59 +45,60 @@ ALTER TABLE dl.inlined ALTER COLUMN v TYPE TIMESTAMPTZ
 statement ok
 ALTER TABLE dl.dates ALTER COLUMN v TYPE TIMESTAMPTZ
 
+# the old values read as UTC instants, not as wall-clock times in the session's zone
 query I
-SELECT count(*) FROM dl.files WHERE v > TIMESTAMPTZ '2020-06-15 13:08:15+00'
+SELECT count(*) FROM dl.files WHERE v < TIMESTAMPTZ '2020-06-15 12:00:00-04'
 ----
 4096
 
 query II
 SELECT min(v), max(v) FROM dl.files
 ----
-2020-06-15 12:00:00-04	2020-06-15 13:08:15-04
+2020-06-15 08:00:00-04	2020-06-15 09:08:15-04
 
 query I
-SELECT count(*) FROM dl.inlined WHERE v = TIMESTAMPTZ '2020-06-15 12:00:00-04'
+SELECT count(*) FROM dl.inlined WHERE v = TIMESTAMPTZ '2020-06-15 12:00:00+00'
 ----
 1
 
 query I
 SELECT max(v) FROM dl.inlined
 ----
-2020-06-15 12:00:00-04
+2020-06-15 08:00:00-04
 
 query I
-SELECT count(*) FROM dl.dates WHERE v > TIMESTAMPTZ '2020-06-15 02:00:00+00'
+SELECT count(*) FROM dl.dates WHERE v < TIMESTAMPTZ '2020-06-15 02:00:00+00'
 ----
 4096
 
 query II
 SELECT min(v), max(v) FROM dl.dates
 ----
-2020-06-15 00:00:00-04	2020-06-15 00:00:00-04
+2020-06-14 20:00:00-04	2020-06-14 20:00:00-04
 
 # bounds with an offset that enclose the old bounds read as UTC
 statement ok
 INSERT INTO dl.files VALUES (0, TIMESTAMPTZ '2020-06-15 11:00:00+00'), (0, TIMESTAMPTZ '2020-06-15 14:00:00+00')
 
 query I
-SELECT count(*) FROM dl.files WHERE v > TIMESTAMPTZ '2020-06-15 15:00:00+00'
+SELECT count(*) FROM dl.files WHERE v > TIMESTAMPTZ '2020-06-15 13:00:00+00'
 ----
-4096
+496
 
 query II
 SELECT min(v), max(v) FROM dl.files
 ----
-2020-06-15 07:00:00-04	2020-06-15 13:08:15-04
+2020-06-15 07:00:00-04	2020-06-15 10:00:00-04
 
 statement ok
 INSERT INTO dl.inlined VALUES (TIMESTAMPTZ '2020-06-15 11:00:00+00'), (TIMESTAMPTZ '2020-06-15 14:00:00+00')
 
 query I
-SELECT count(*) FROM dl.inlined WHERE v > TIMESTAMPTZ '2020-06-15 15:00:00+00'
+SELECT count(*) FROM dl.inlined WHERE v > TIMESTAMPTZ '2020-06-15 13:00:00+00'
 ----
 1
 
 query I
 SELECT max(v) FROM dl.inlined
 ----
-2020-06-15 12:00:00-04
+2020-06-15 10:00:00-04

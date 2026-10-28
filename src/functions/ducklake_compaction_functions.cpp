@@ -483,9 +483,8 @@ static bool ScanHasSortColumns(const DuckLakeTableEntry &latest_table, const Duc
 }
 
 //! Map a sort bound to the latest table onto the scan, false when it cannot be
-static bool MapSortToSchemaVersion(ClientContext &context, unique_ptr<Expression> &expr,
-                                   const DuckLakeTableEntry &latest_table, const DuckLakeTableEntry &table,
-                                   TableIndex scan_index) {
+static bool MapSortToSchemaVersion(unique_ptr<Expression> &expr, const DuckLakeTableEntry &latest_table,
+                                   const DuckLakeTableEntry &table, TableIndex scan_index) {
 	bool mapped = true;
 	ExpressionIterator::VisitExpressionMutable<BoundColumnRefExpression>(expr, [&](BoundColumnRefExpression &column_ref,
 	                                                                               unique_ptr<Expression> &child) {
@@ -506,8 +505,8 @@ static bool MapSortToSchemaVersion(ClientContext &context, unique_ptr<Expression
 			mapped = mapped && version_column.Type() == column.Type() &&
 			         FieldsPreservedInLatest(version_field_id->Children(), latest_table.GetFieldData());
 		} else if (version_column.Type() != column.Type()) {
-			// a promoted column is compared in its latest type
-			child = BoundCastExpression::AddCastToType(context, std::move(child), column.Type());
+			// a promoted column is compared in its latest type, cast as a scan casts it
+			child = BoundCastExpression::AddDefaultCastToType(std::move(child), column.Type());
 		}
 	});
 	return mapped;
@@ -536,8 +535,7 @@ unique_ptr<LogicalOperator> DuckLakeCompactor::InsertSort(Binder &binder, unique
 				                            child.Cast<BoundSubqueryExpression>().IsCorrelated());
 			});
 			// a correlated subquery keeps the bindings of the latest table
-			if (correlated ||
-			    !MapSortToSchemaVersion(binder.context, order.expression, latest_table, table, scan_index)) {
+			if (correlated || !MapSortToSchemaVersion(order.expression, latest_table, table, scan_index)) {
 				// the sort cannot be evaluated on the columns the files were written with
 				return std::move(plan);
 			}

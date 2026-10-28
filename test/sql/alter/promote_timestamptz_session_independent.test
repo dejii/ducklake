@@ -1,0 +1,114 @@
+# name: test/sql/alter/promote_timestamptz_session_independent.test
+# description: values written before a promotion to TIMESTAMPTZ read as the same UTC instants in every session time zone
+# group: [alter]
+
+require ducklake
+
+require parquet
+
+require icu
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/promote_timestamptz_session_independent')
+
+statement ok
+USE ducklake
+
+# the zone of the session that promotes the column does not matter either
+statement ok
+SET TimeZone='America/New_York'
+
+foreach inline_limit 0 10
+
+statement ok
+CALL ducklake.set_option('data_inlining_row_limit', '{inline_limit}');
+
+statement ok
+CREATE OR REPLACE TABLE t(id INTEGER, ts TIMESTAMP, ts_s TIMESTAMP_S, ts_ms TIMESTAMP_MS, d DATE, s STRUCT(v TIMESTAMP))
+
+statement ok
+INSERT INTO t VALUES (1, TIMESTAMP '2024-01-15 12:00:00', TIMESTAMP_S '2024-01-15 12:00:00',
+    TIMESTAMP_MS '2024-01-15 12:00:00', DATE '2024-01-15', {'v': TIMESTAMP '2024-01-15 12:00:00'})
+
+statement ok
+ALTER TABLE t ALTER ts SET DATA TYPE TIMESTAMPTZ
+
+statement ok
+ALTER TABLE t ALTER ts_s SET DATA TYPE TIMESTAMPTZ
+
+statement ok
+ALTER TABLE t ALTER ts_ms SET DATA TYPE TIMESTAMPTZ
+
+statement ok
+ALTER TABLE t ALTER d SET DATA TYPE TIMESTAMPTZ
+
+statement ok
+ALTER TABLE t ALTER s SET DATA TYPE STRUCT(v TIMESTAMPTZ)
+
+statement ok
+INSERT INTO t VALUES (2, TIMESTAMPTZ '2024-01-15 12:00:00+00', TIMESTAMPTZ '2024-01-15 12:00:00+00',
+    TIMESTAMPTZ '2024-01-15 12:00:00+00', TIMESTAMPTZ '2024-01-15 00:00:00+00', {'v': TIMESTAMPTZ '2024-01-15 12:00:00+00'})
+
+statement ok
+SET TimeZone='UTC'
+
+query IIIIII
+SELECT id, ts, ts_s, ts_ms, d, s.v FROM t ORDER BY id
+----
+1	2024-01-15 12:00:00+00	2024-01-15 12:00:00+00	2024-01-15 12:00:00+00	2024-01-15 00:00:00+00	2024-01-15 12:00:00+00
+2	2024-01-15 12:00:00+00	2024-01-15 12:00:00+00	2024-01-15 12:00:00+00	2024-01-15 00:00:00+00	2024-01-15 12:00:00+00
+
+statement ok
+SET TimeZone='America/New_York'
+
+query IIIIII
+SELECT id, ts, ts_s, ts_ms, d, s.v FROM t ORDER BY id
+----
+1	2024-01-15 07:00:00-05	2024-01-15 07:00:00-05	2024-01-15 07:00:00-05	2024-01-14 19:00:00-05	2024-01-15 07:00:00-05
+2	2024-01-15 07:00:00-05	2024-01-15 07:00:00-05	2024-01-15 07:00:00-05	2024-01-14 19:00:00-05	2024-01-15 07:00:00-05
+
+statement ok
+SET TimeZone='Asia/Tokyo'
+
+query IIIIII
+SELECT id, ts, ts_s, ts_ms, d, s.v FROM t ORDER BY id
+----
+1	2024-01-15 21:00:00+09	2024-01-15 21:00:00+09	2024-01-15 21:00:00+09	2024-01-15 09:00:00+09	2024-01-15 21:00:00+09
+2	2024-01-15 21:00:00+09	2024-01-15 21:00:00+09	2024-01-15 21:00:00+09	2024-01-15 09:00:00+09	2024-01-15 21:00:00+09
+
+# filters evaluated against the old rows see the same instants
+query I
+SELECT id FROM t WHERE ts = TIMESTAMPTZ '2024-01-15 12:00:00+00' AND d = TIMESTAMPTZ '2024-01-15 00:00:00+00' ORDER BY id
+----
+1
+2
+
+query I
+SELECT count(*) FROM t WHERE ts_s < TIMESTAMPTZ '2024-01-15 12:00:00+00' OR ts_ms > TIMESTAMPTZ '2024-01-15 12:00:00+00'
+----
+0
+
+# rewriting the old rows from a session in another zone keeps their instants
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake', 't')
+
+statement ok
+SET TimeZone='UTC'
+
+query IIIIII
+SELECT id, ts, ts_s, ts_ms, d, s.v FROM t ORDER BY id
+----
+1	2024-01-15 12:00:00+00	2024-01-15 12:00:00+00	2024-01-15 12:00:00+00	2024-01-15 00:00:00+00	2024-01-15 12:00:00+00
+2	2024-01-15 12:00:00+00	2024-01-15 12:00:00+00	2024-01-15 12:00:00+00	2024-01-15 00:00:00+00	2024-01-15 12:00:00+00
+
+statement ok
+SET TimeZone='America/New_York'
+
+endloop

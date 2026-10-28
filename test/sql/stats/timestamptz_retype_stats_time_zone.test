@@ -37,9 +37,9 @@ statement ok
 SET TimeZone = 'America/New_York'
 
 query I
-SELECT count(*) FROM dl.t WHERE v > TIMESTAMPTZ '2020-06-15 13:08:15+00'
+SELECT count(*) FROM dl.t WHERE v < TIMESTAMPTZ '2020-06-15 12:00:00-04'
 ----
-4096
+8192
 
 statement ok
 SET TimeZone = 'Asia/Tokyo'
@@ -47,12 +47,12 @@ SET TimeZone = 'Asia/Tokyo'
 query I
 SELECT count(*) FROM dl.t WHERE v < TIMESTAMPTZ '2020-06-15 05:00:00+00'
 ----
-8192
+4096
 
 query I
 SELECT count(*) FROM dl.t WHERE v > TIMESTAMPTZ '2020-06-15 05:00:00+00'
 ----
-0
+4096
 
 query II
 EXPLAIN ANALYZE SELECT count(*) FROM dl.t WHERE v > TIMESTAMPTZ '2020-01-01 00:00:00+00'

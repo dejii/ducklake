@@ -18,6 +18,9 @@
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
+#include "duckdb/planner/expression/bound_cast_expression.hpp"
+#include "duckdb/planner/expression_iterator.hpp"
+#include "duckdb/common/type_visitor.hpp"
 #include "duckdb/parser/parsed_expression.hpp"
 #include "duckdb/planner/binder.hpp"
 #include "duckdb/planner/operator/logical_get.hpp"
@@ -301,6 +304,52 @@ DuckLakeMultiFileReader::InitializeGlobalState(ClientContext &context, const Mul
 	                                                     deletion_scan_file_row_number_col);
 }
 
+static bool IsNaiveTemporal(const LogicalType &type) {
+	switch (type.id()) {
+	case LogicalTypeId::DATE:
+	case LogicalTypeId::TIMESTAMP:
+	case LogicalTypeId::TIMESTAMP_SEC:
+	case LogicalTypeId::TIMESTAMP_MS:
+	case LogicalTypeId::TIMESTAMP_NS:
+		return true;
+	default:
+		return false;
+	}
+}
+
+static bool IsZonedTimestamp(const LogicalType &type) {
+	return type.id() == LogicalTypeId::TIMESTAMP_TZ || type.id() == LogicalTypeId::TIMESTAMP_TZ_NS;
+}
+
+//! A file written before its column was promoted to TIMESTAMPTZ holds naive values, and the catalog records no zone
+//! for the promotion: read them as UTC instants instead of through the session TimeZone that ICU's cast uses
+static void UseUTCForPromotedTimestamps(unique_ptr<Expression> &expr) {
+	if (BoundCastExpression::IsCast(*expr)) {
+		auto &cast = expr->Cast<BoundFunctionExpression>();
+		auto source_type = BoundCastExpression::SourceType(cast);
+		auto target_type = BoundCastExpression::TargetType(cast);
+		if (!BoundCastExpression::IsDefaultCast(cast) && TypeVisitor::Contains(source_type, IsNaiveTemporal) &&
+		    TypeVisitor::Contains(target_type, IsZonedTimestamp)) {
+			auto try_cast = BoundCastExpression::IsTryCast(cast);
+			auto child = std::move(BoundCastExpression::ChildMutable(cast));
+			expr = BoundCastExpression::AddDefaultCastToType(std::move(child), target_type, try_cast);
+			return;
+		}
+	}
+	ExpressionIterator::EnumerateChildren(*expr,
+	                                      [](unique_ptr<Expression> &child) { UseUTCForPromotedTimestamps(child); });
+}
+
+static void UseUTCForPromotedTimestamps(MultiFileReaderData &reader_data) {
+	for (auto &expr : reader_data.expressions) {
+		UseUTCForPromotedTimestamps(expr);
+	}
+	// expressions that a filter needs are evaluated inside the reader
+	for (auto &entry : reader_data.reader->expression_map) {
+		UseUTCForPromotedTimestamps(entry.second.expression);
+	}
+}
+
 ReaderInitializeType DuckLakeMultiFileReader::InitializeReader(MultiFileReaderData &reader_data,
                                                                const MultiFileBindData &bind_data,
                                                                const vector<MultiFileColumnDefinition> &global_columns,
@@ -379,6 +428,9 @@ ReaderInitializeType DuckLakeMultiFileReader::InitializeReader(MultiFileReaderDa
 	auto result =
 	    CreateMappingWithGlobalState(context, reader_data, global_columns, global_column_ids, table_filters,
 	                                 gstate.file_list, bind_data.reader_bind, bind_data.virtual_columns, global_state);
+	if (result == ReaderInitializeType::INITIALIZED) {
+		UseUTCForPromotedTimestamps(reader_data);
+	}
 
 	// Handle snapshot filters for files with multiple snapshots (partial_max set)
 	if (file_entry.snapshot_filter_max.IsValid() || file_entry.snapshot_filter_min.IsValid()) {
